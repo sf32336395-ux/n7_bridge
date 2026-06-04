@@ -1,44 +1,55 @@
 # N7 Autonomous Bridge - Technical Context
 
+## 📋 Project Status (As of 2026-05-28)
+Successfully integrated perception data with vehicle control. The workflow now supports end-to-end execution from `rosbag` data to N7 virtual control commands.
+
 ## 🧠 Architectural Logic
 This module acts as the **Controller** and **Vehicle Actuator Interface** in the autonomous driving stack.
 
 ### 1. Perception to Control Mapping
+*   **Data Source**: Transitioned from raw image processing to direct ROS 2 `/centerline` (Path) subscription.
 *   **Coordinate System**: 
-    *   **ZED SDK**: Uses a Left-Handed coordinate system by default (Z-forward, X-right).
-    *   **Bridge Logic**: Maps ZED coordinates to the vehicle's ISO-8855 frame (X-forward, Y-left). 
-    *   *Transformation*: `Vehicle_X = ZED_Z`, `Vehicle_Y = -ZED_X`.
-*   **Target Selection**: The bridge expects a "Look-ahead Point" from the `zed_yolo_tf` module, typically chosen on the centerline at a distance $L_{fw}$ (adaptive or fixed).
+    *   **ROS/ISO-8855**: Uses X-forward, Y-left.
+    *   **ZED SDK**: Uses Z-forward, X-right.
+    *   **Correction**: Recent updates in `ros2_lane_follower.py` have fixed the mapping errors between ROS and ZED frames.
+*   **Target Selection**: The bridge uses a Look-ahead Point derived from the `/centerline` Path.
 
 ### 2. Control Law: Pure Pursuit
-The steering angle $\delta$ is calculated based on the kinematic bicycle model:
+Implemented in `ros2_lane_follower.py`:
 $$\delta = \tan^{-1}\left(\frac{2L\sin(\alpha)}{L_{fw}}\right)$$
-Where:
-*   $L$: Vehicle wheelbase ($2.92m$ for N7).
-*   $\alpha$: Angle between the vehicle's heading and the look-ahead point.
-*   $L_{fw}$: Look-ahead distance.
+*   **Vehicle Wheelbase ($L$)**: $2.92m$.
+*   **Look-ahead Distance ($L_{fw}$)**: Configurable via ROS parameters (Default: 4.0m - 6.0m).
 
 ### 3. Vehicle Actuation (UDS/DoIP)
-The bridge encapsulates the **14-parameter control list** required by the `FoxPi_write.FoxPi_Driving_Ctrl` method:
-*   **SWA (Steering Wheel Angle)**: Calculated as $\delta \times 15.0$ (Steering Ratio).
-*   **Speed**: Enforced via `TargetSpd` and `APSSpeedCMD` parameters.
-*   **Session Management**: `FoxPi_TP` runs in a background thread to maintain the **Extended Diagnostic Session (0x03)** and handle **Security Access (0x27)**.
+Managed via `n7_control_bridge.py` and `foxtronpi-pyclient`:
+*   **SWA (Steering Wheel Angle)**: $\delta \times 15.0$ (Steering Ratio). Left is positive (+), Right is negative (-).
+*   **Communication**: Uses UDS/DoIP. `FoxPi_TP` maintains the Extended Diagnostic Session (0x03).
+*   **Mock Mode**: Automatically activated if physical hardware is not detected.
 
-## 🐧 Linux Deployment Guide
-### Environment Setup
-1.  Ensure you have `python3-pip` and `python3-venv`.
-2.  It is recommended to run inside a virtual environment:
-    ```bash
-    python3 -m venv n7_env
-    source n7_env/bin/activate
-    pip install doipclient udsoncan numpy
-    ```
+## 🚀 Execution Guide
 
-### Network Troubleshooting
-*   The N7 DoIP gateway typically expects the client to be on `192.168.1.XX`.
-*   Use `ping 192.168.1.10` to verify the connection to the vehicle.
-*   If the vehicle is not responding to UDS commands, check if another diagnostic tool is already holding the session.
+### 1. Environment Setup
+```bash
+source /opt/ros/humble/setup.bash
+export PYTHONPATH=$PYTHONPATH:/home/chan_baby/foxtronpi-pyclient
+```
+
+### 2. Running the System
+1.  **Play Data**: 
+    `ros2 bag play /home/chan_baby/Downloads/rosbag_test/rosbag2_2026_05_21-16_36_36/ --loop`
+2.  **Start Control Node**:
+    `python3 /home/chan_baby/Downloads/n7_bridge-main/ros2_lane_follower.py`
+    *Optional: Adjust look-ahead distance:*
+    `python3 ros2_lane_follower.py --ros-args -p look_ahead_distance:=6.0`
+
+### 3. Visualization (RViz2)
+*   **Fixed Frame**: `zed_left_camera_frame` (or `base_link`).
+*   **Key Topics**:
+    *   `/centerline` (Path) - Use bright color (Green).
+    *   `/zed/zed_node/left/color/rect/image` (Image).
+    *   `/cone_markers` (MarkerArray).
 
 ## 🛠️ Development Conventions
-*   **Safety Limits**: SWA is hard-capped at $\pm 450^\circ$.
-*   **Mock Mode**: If `doipclient` or `udsoncan` are not installed, the bridge automatically falls back to a mock mode that prints signals to `stdout`.
+*   **Safety**: SWA capped at $\pm 450^\circ$.
+*   **Diagnostic**: A status monitor is integrated into `ros2_lane_follower.py` to show real-time rosbag streaming status.
+*   **Library Dependency**: Ensure `foxtronpi-pyclient` is in the `PYTHONPATH`.
