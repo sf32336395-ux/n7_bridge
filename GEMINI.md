@@ -1,30 +1,28 @@
 # N7 Autonomous Bridge - Technical Context
 
-## 📋 Project Status (As of 2026-05-28)
-Successfully integrated perception data with vehicle control. The workflow now supports end-to-end execution from `rosbag` data to N7 virtual control commands.
+## 📋 Project Status (As of 2026-06-04)
+Successfully implemented and stabilized the autonomous steering control stack. The system now features high-precision path tracking and smooth actuation commands suitable for N7 vehicle dynamics.
 
 ## 🧠 Architectural Logic
-This module acts as the **Controller** and **Vehicle Actuator Interface** in the autonomous driving stack.
+This module acts as the **Controller** and **Vehicle Actuator Interface**, bridging ROS 2 perception data with UDS/DoIP vehicle protocols.
 
-### 1. Perception to Control Mapping
-*   **Data Source**: Transitioned from raw image processing to direct ROS 2 `/centerline` (Path) subscription.
-*   **Coordinate System**: 
-    *   **ROS/ISO-8855**: Uses X-forward, Y-left.
-    *   **ZED SDK**: Uses Z-forward, X-right.
-    *   **Correction**: Recent updates in `ros2_lane_follower.py` have fixed the mapping errors between ROS and ZED frames.
-*   **Target Selection**: The bridge uses a Look-ahead Point derived from the `/centerline` Path.
-
-### 2. Control Law: Pure Pursuit
-Implemented in `ros2_lane_follower.py`:
+### 1. Control Law: Pure Pursuit
+The steering angle $\delta$ is calculated based on the kinematic bicycle model:
 $$\delta = \tan^{-1}\left(\frac{2L\sin(\alpha)}{L_{fw}}\right)$$
-*   **Vehicle Wheelbase ($L$)**: $2.92m$.
-*   **Look-ahead Distance ($L_{fw}$)**: Configurable via ROS parameters (Default: 4.0m - 6.0m).
+*   **Vehicle Wheelbase ($L$)**: $2.92m$ (Fixed for N7).
+*   **Look-ahead Distance ($L_{fw}$)**: Configurable via ROS parameters (Default: $5.0m - 7.0m$).
 
-### 3. Vehicle Actuation (UDS/DoIP)
-Managed via `n7_control_bridge.py` and `foxtronpi-pyclient`:
-*   **SWA (Steering Wheel Angle)**: $\delta \times 15.0$ (Steering Ratio). Left is positive (+), Right is negative (-).
-*   **Communication**: Uses UDS/DoIP. `FoxPi_TP` maintains the Extended Diagnostic Session (0x03).
-*   **Mock Mode**: Automatically activated if physical hardware is not detected.
+### 2. Stability Enhancements (New)
+To address steering instability and perception noise, two major upgrades were implemented:
+*   **Path Interpolation**: Instead of selecting the "closest" point, the system now performs linear interpolation between ROS path points to find a precise look-ahead target at exactly $L_{fw}$.
+*   **SWA Low-Pass Filter (LPF)**: Implemented an exponential smoothing filter to prevent sharp steering jumps.
+    *   Formula: $SWA_{out} = \alpha \cdot SWA_{new} + (1 - \alpha) \cdot SWA_{old}$
+    *   Default $\alpha$: $0.1$ (High smoothing).
+
+### 3. Coordinate Systems
+*   **ROS (ISO-8855)**: $X$-forward, $Y$-left.
+*   **Bridge Input**: Expects relative coordinates where $X$ is lateral and $Z$ is longitudinal.
+*   **Mapping**: `Vehicle_X = Target_Z`, `Vehicle_Y = -Target_X`.
 
 ## 🚀 Execution Guide
 
@@ -35,21 +33,15 @@ export PYTHONPATH=$PYTHONPATH:/home/chan_baby/foxtronpi-pyclient
 ```
 
 ### 2. Running the System
-1.  **Play Data**: 
-    `ros2 bag play /home/chan_baby/Downloads/rosbag_test/rosbag2_2026_05_21-16_36_36/ --loop`
-2.  **Start Control Node**:
-    `python3 /home/chan_baby/Downloads/n7_bridge-main/ros2_lane_follower.py`
-    *Optional: Adjust look-ahead distance:*
-    `python3 ros2_lane_follower.py --ros-args -p look_ahead_distance:=6.0`
+```bash
+# Start the follower node with custom stability parameters
+python3 ros2_lane_follower.py --ros-args -p look_ahead_distance:=6.5 -p smoothing_alpha:=0.1
+```
 
-### 3. Visualization (RViz2)
-*   **Fixed Frame**: `zed_left_camera_frame` (or `base_link`).
-*   **Key Topics**:
-    *   `/centerline` (Path) - Use bright color (Green).
-    *   `/zed/zed_node/left/color/rect/image` (Image).
-    *   `/cone_markers` (MarkerArray).
+## 🛠️ Debugging & Validation
+*   **Precision Logging**: Target coordinates are logged with 4-decimal precision to monitor micro-movements in the perception stack.
+*   **Safety Limits**: Steering Wheel Angle (SWA) is hard-capped at $\pm 450^\circ$.
+*   **Mock Mode**: Automatically activated if DoIP/UDS libraries or hardware are missing.
 
-## 🛠️ Development Conventions
-*   **Safety**: SWA capped at $\pm 450^\circ$.
-*   **Diagnostic**: A status monitor is integrated into `ros2_lane_follower.py` to show real-time rosbag streaming status.
-*   **Library Dependency**: Ensure `foxtronpi-pyclient` is in the `PYTHONPATH`.
+---
+*This document is maintained via Gemini CLI to reflect the latest workspace state.*
