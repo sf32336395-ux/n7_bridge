@@ -22,10 +22,15 @@ DOIP_LOGICAL_ADDRESS = 0x1000   # 請依實車調整
 
 class N7ControlBridge:
     def __init__(self, target_speed_kmh=5.0):
+        global LIB_AVAILABLE
         self.L = 2.92
         self.steering_ratio = 15.0
         self.fixed_speed = target_speed_kmh
         self.uds_client = None
+        
+        # 濾波參數
+        self.last_swa = 0.0
+        self.alpha = 0.3 # 濾波強度 (0.1 ~ 0.5 推薦)
         
         if LIB_AVAILABLE:
             try:
@@ -63,10 +68,14 @@ class N7ControlBridge:
         ld = math.sqrt(car_x**2 + car_y**2)
         
         if ld < 1.0:
-            swa = 0.0
+            raw_swa = 0.0
         else:
             delta = math.atan(2 * self.L * car_y / (ld**2))
-            swa = math.degrees(delta) * self.steering_ratio
+            raw_swa = math.degrees(delta) * self.steering_ratio
+        
+        # --- 低通濾波 (Low Pass Filter) ---
+        swa = self.alpha * raw_swa + (1 - self.alpha) * self.last_swa
+        self.last_swa = swa
         
         # N7 安全限制
         swa = np.clip(swa, -450, 450)
